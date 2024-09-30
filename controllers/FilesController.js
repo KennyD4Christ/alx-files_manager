@@ -3,9 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import mime from 'mime-types';
 import { ObjectId } from 'mongodb';
+import Bull from 'bull';
 import redisClient from '../utils/redis';
 import dbClient from '../utils/db';
-import Bull from 'bull';
 
 const fileQueue = new Bull('fileQueue');
 
@@ -20,7 +20,9 @@ class FilesController {
     const user = await dbClient.db.collection('users').findOne({ _id: ObjectId(userId) });
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { name, type, parentId = 0, isPublic = false, data } = req.body;
+    const {
+      name, type, parentId = 0, isPublic = false, data,
+    } = req.body;
 
     if (!name) return res.status(400).json({ error: 'Missing name' });
     if (!type || !['folder', 'file', 'image'].includes(type)) return res.status(400).json({ error: 'Missing type' });
@@ -50,35 +52,34 @@ class FilesController {
         isPublic,
         parentId,
       });
-    } else {
-      const folderPath = process.env.FOLDER_PATH || '/tmp/files_manager';
-      if (!fs.existsSync(folderPath)) {
-        fs.mkdirSync(folderPath, { recursive: true });
-      }
-
-      const filename = uuidv4();
-      const localPath = path.join(folderPath, filename);
-
-      const fileBuffer = Buffer.from(data, 'base64');
-      await fs.promises.writeFile(localPath, fileBuffer);
-
-      fileDocument.localPath = localPath;
-
-      const result = await dbClient.db.collection('files').insertOne(fileDocument);
-      
-      if (type === 'image') {
-        fileQueue.add({ userId: user._id.toString(), fileId: result.insertedId.toString() });
-      }
-
-      return res.status(201).json({
-        id: result.insertedId,
-        userId: user._id,
-        name,
-        type,
-        isPublic,
-        parentId,
-      });
     }
+    const folderPath = process.env.FOLDER_PATH || '/tmp/files_manager';
+    if (!fs.existsSync(folderPath)) {
+      fs.mkdirSync(folderPath, { recursive: true });
+    }
+
+    const filename = uuidv4();
+    const localPath = path.join(folderPath, filename);
+
+    const fileBuffer = Buffer.from(data, 'base64');
+    await fs.promises.writeFile(localPath, fileBuffer);
+
+    fileDocument.localPath = localPath;
+
+    const result = await dbClient.db.collection('files').insertOne(fileDocument);
+
+    if (type === 'image') {
+      fileQueue.add({ userId: user._id.toString(), fileId: result.insertedId.toString() });
+    }
+
+    return res.status(201).json({
+      id: result.insertedId,
+      userId: user._id,
+      name,
+      type,
+      isPublic,
+      parentId,
+    });
   }
 
   static async getShow(req, res) {
@@ -104,7 +105,7 @@ class FilesController {
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
     const parentId = req.query.parentId || '0';
-    const page = parseInt(req.query.page) || 0;
+    const page = parseInt(req.query.page, 10) || 0; // Fixed: Added radix parameter (10)
     const pageSize = 20;
 
     const pipeline = [
@@ -129,7 +130,7 @@ class FilesController {
     const file = await dbClient.db.collection('files').findOneAndUpdate(
       { _id: ObjectId(fileId), userId: ObjectId(userId) },
       { $set: { isPublic: true } },
-      { returnDocument: 'after' }
+      { returnDocument: 'after' },
     );
 
     if (!file.value) return res.status(404).json({ error: 'Not found' });
@@ -148,7 +149,7 @@ class FilesController {
     const file = await dbClient.db.collection('files').findOneAndUpdate(
       { _id: ObjectId(fileId), userId: ObjectId(userId) },
       { $set: { isPublic: false } },
-      { returnDocument: 'after' }
+      { returnDocument: 'after' },
     );
 
     if (!file.value) return res.status(404).json({ error: 'Not found' });
@@ -156,9 +157,10 @@ class FilesController {
     return res.json(file.value);
   }
 
+  // eslint-disable-next-line consistent-return
   static async getFile(req, res) {
     const fileId = req.params.id;
-    const size = req.query.size;
+    const { size } = req.query;
 
     const file = await dbClient.db.collection('files').findOne({ _id: ObjectId(fileId) });
 
