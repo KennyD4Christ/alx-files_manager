@@ -31,10 +31,6 @@ class UsersController {
       id: result.insertedId,
       email,
     });
-    const result = await dbClient.db.collection('users').insertOne({
-      email,
-      password: hashedPassword,
-    });
 
     // Add job to userQueue
     await userQueue.add({ userId: result.insertedId.toString() });
